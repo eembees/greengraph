@@ -28,24 +28,11 @@
       flex-shrink: 0;
     }
 
-    header h1 {
-      font-size: 1.1rem;
-      font-weight: 600;
-      color: #4caf50;
-    }
+    header h1 { font-size: 1.1rem; font-weight: 600; color: #4caf50; }
 
-    .toolbar {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-    }
+    .toolbar { display: flex; gap: 8px; align-items: center; }
 
-    .graph-selector {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      margin-left: auto;
-    }
+    .graph-selector { display: flex; gap: 8px; align-items: center; margin-left: auto; }
 
     select, input[type="text"] {
       background: #2a2a2a;
@@ -68,33 +55,13 @@
     }
 
     button:hover { background: #3a3a3a; }
-
-    button.primary {
-      background: #2e7d32;
-      border-color: #4caf50;
-      color: #fff;
-    }
-
+    button.primary { background: #2e7d32; border-color: #4caf50; color: #fff; }
     button.primary:hover { background: #388e3c; }
-
-    button.danger {
-      background: #7f1d1d;
-      border-color: #ef4444;
-    }
-
+    button.danger { background: #7f1d1d; border-color: #ef4444; }
     button.danger:hover { background: #991b1b; }
 
-    #canvas-container {
-      flex: 1;
-      position: relative;
-      overflow: hidden;
-    }
-
-    #graph-canvas {
-      display: block;
-      width: 100%;
-      height: 100%;
-    }
+    #canvas-container { flex: 1; position: relative; overflow: hidden; }
+    #graph-canvas { display: block; width: 100%; height: 100%; }
 
     #status {
       position: absolute;
@@ -132,11 +99,9 @@
     }
 
     .modal h2 { font-size: 1rem; }
-
     .modal label { font-size: 0.875rem; color: #aaa; }
 
-    .modal input[type="text"],
-    .modal textarea {
+    .modal input[type="text"] {
       width: 100%;
       background: #1a1a1a;
       color: #e0e0e0;
@@ -144,14 +109,9 @@
       border-radius: 4px;
       padding: 6px 8px;
       font-size: 0.875rem;
-      resize: vertical;
     }
 
-    .modal-actions {
-      display: flex;
-      justify-content: flex-end;
-      gap: 8px;
-    }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
   </style>
 </head>
 <body>
@@ -179,10 +139,10 @@
   <div id="status">ready</div>
 </div>
 
-<!-- Save / rename modal -->
+<!-- Save / create modal -->
 <div id="save-modal" class="modal-overlay">
   <div class="modal">
-    <h2>Save graph</h2>
+    <h2 id="modal-title">Save graph</h2>
     <label>Name</label>
     <input type="text" id="save-name" placeholder="My graph" />
     <label>Description</label>
@@ -197,6 +157,7 @@
 <script>
   // ── LiteGraph setup ─────────────────────────────────────────────────────────
   LiteGraph.clearRegisteredTypes();
+
   LiteGraph.registerNodeType("basic/const", class ConstNode extends LGraphNode {
     constructor() {
       super();
@@ -226,7 +187,6 @@
   const canvas = document.getElementById("graph-canvas");
   const container = document.getElementById("canvas-container");
 
-  // Resize canvas to fill container
   function resizeCanvas() {
     canvas.width = container.clientWidth;
     canvas.height = container.clientHeight;
@@ -243,7 +203,7 @@
   resizeCanvas();
 
   // ── State ────────────────────────────────────────────────────────────────────
-  let currentGraphId = null;
+  let currentGraphGuid = null;   // DB guid of the currently loaded graph
 
   function setStatus(msg, type = "ok") {
     const el = document.getElementById("status");
@@ -263,7 +223,10 @@
       headers: { "Content-Type": "application/json" },
       ...opts,
     });
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    if (!res.ok) {
+      const detail = await res.text().catch(() => res.statusText);
+      throw new Error(`${res.status}: ${detail}`);
+    }
     if (res.status === 204) return null;
     return res.json();
   }
@@ -273,45 +236,46 @@
     try {
       const graphs = await apiFetch("/api/graphs/");
       const sel = document.getElementById("graph-select");
-      const prev = sel.value;
       sel.innerHTML = '<option value="">— new graph —</option>';
       for (const g of graphs) {
         const opt = document.createElement("option");
-        opt.value = g.id;
+        opt.value = g.guid;
         opt.textContent = g.name;
         sel.appendChild(opt);
       }
-      if (currentGraphId) sel.value = currentGraphId;
+      if (currentGraphGuid) sel.value = currentGraphGuid;
     } catch (e) {
-      setStatus("Failed to load graph list", "error");
+      setStatus("Failed to load graph list: " + e.message, "error");
     }
   }
 
   async function loadSelectedGraph() {
     const sel = document.getElementById("graph-select");
-    const id = sel.value;
-    if (!id) {
+    const guid = sel.value;
+    if (!guid) {
       graph.clear();
-      currentGraphId = null;
+      currentGraphGuid = null;
       setStatus("New graph");
       return;
     }
     try {
-      const g = await apiFetch(`/api/graphs/${id}`);
-      graph.configure(g.data);
-      currentGraphId = g.id;
+      const g = await apiFetch(`/api/graphs/${guid}`);
+      // g.graph_data is LiteGraph.js-compatible serialization
+      graph.configure(g.graph_data);
+      currentGraphGuid = g.guid;
       setStatus(`Loaded "${g.name}"`);
     } catch (e) {
-      setStatus("Failed to load graph", "error");
+      setStatus("Failed to load graph: " + e.message, "error");
     }
   }
 
   // ── Save ─────────────────────────────────────────────────────────────────────
   function openSaveModal() {
     const sel = document.getElementById("graph-select");
-    const opt = sel.options[sel.selectedIndex];
+    document.getElementById("modal-title").textContent =
+      currentGraphGuid ? "Rename & save" : "Create graph";
     document.getElementById("save-name").value =
-      currentGraphId ? opt.textContent : "";
+      currentGraphGuid ? sel.options[sel.selectedIndex].textContent : "";
     document.getElementById("save-desc").value = "";
     document.getElementById("save-modal").classList.add("open");
     document.getElementById("save-name").focus();
@@ -325,39 +289,64 @@
     const name = document.getElementById("save-name").value.trim();
     if (!name) { alert("Please enter a name."); return; }
     const description = document.getElementById("save-desc").value.trim();
-    const data = graph.serialize();
+    const graph_data = graph.serialize();
 
     try {
-      if (currentGraphId) {
-        await apiFetch(`/api/graphs/${currentGraphId}`, {
+      if (currentGraphGuid) {
+        // Update metadata (name/description) then sync graph topology
+        await apiFetch(`/api/graphs/${currentGraphGuid}`, {
+          method: "PATCH",
+          body: JSON.stringify({ name, description }),
+        });
+        await apiFetch(`/api/graphs/${currentGraphGuid}`, {
           method: "PUT",
-          body: JSON.stringify({ name, description, data }),
+          body: JSON.stringify({ graph_data }),
         });
         setStatus(`Saved "${name}"`);
       } else {
+        // Create graph record, then push topology
         const g = await apiFetch("/api/graphs/", {
           method: "POST",
-          body: JSON.stringify({ name, description, data }),
+          body: JSON.stringify({ name, description }),
         });
-        currentGraphId = g.id;
+        currentGraphGuid = g.guid;
+        await apiFetch(`/api/graphs/${currentGraphGuid}`, {
+          method: "PUT",
+          body: JSON.stringify({ graph_data }),
+        });
         setStatus(`Created "${name}"`);
       }
       closeSaveModal();
       await refreshGraphList();
-      document.getElementById("graph-select").value = currentGraphId;
+      document.getElementById("graph-select").value = currentGraphGuid;
     } catch (e) {
       setStatus("Save failed: " + e.message, "error");
     }
   }
 
+  async function saveCurrentSilent() {
+    const graph_data = graph.serialize();
+    try {
+      await apiFetch(`/api/graphs/${currentGraphGuid}`, {
+        method: "PUT",
+        body: JSON.stringify({ graph_data }),
+      });
+      const sel = document.getElementById("graph-select");
+      const name = sel.options[sel.selectedIndex].textContent;
+      setStatus(`Auto-saved "${name}"`);
+    } catch (e) {
+      setStatus("Auto-save failed: " + e.message, "error");
+    }
+  }
+
   // ── Delete ───────────────────────────────────────────────────────────────────
   async function deleteCurrentGraph() {
-    if (!currentGraphId) { setStatus("No graph selected", "error"); return; }
-    if (!confirm("Delete this graph?")) return;
+    if (!currentGraphGuid) { setStatus("No graph selected", "error"); return; }
+    if (!confirm("Delete this graph and all its nodes/edges?")) return;
     try {
-      await apiFetch(`/api/graphs/${currentGraphId}`, { method: "DELETE" });
+      await apiFetch(`/api/graphs/${currentGraphGuid}`, { method: "DELETE" });
       graph.clear();
-      currentGraphId = null;
+      currentGraphGuid = null;
       setStatus("Deleted");
       await refreshGraphList();
     } catch (e) {
@@ -365,33 +354,17 @@
     }
   }
 
-  // Close modal on overlay click
+  // ── Event wiring ─────────────────────────────────────────────────────────────
   document.getElementById("save-modal").addEventListener("click", (e) => {
     if (e.target === e.currentTarget) closeSaveModal();
   });
 
-  // Auto-save shortcut
   document.addEventListener("keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === "s") {
       e.preventDefault();
-      currentGraphId ? saveCurrentSilent() : openSaveModal();
+      currentGraphGuid ? saveCurrentSilent() : openSaveModal();
     }
   });
-
-  async function saveCurrentSilent() {
-    const data = graph.serialize();
-    try {
-      const sel = document.getElementById("graph-select");
-      const name = sel.options[sel.selectedIndex].textContent;
-      await apiFetch(`/api/graphs/${currentGraphId}`, {
-        method: "PUT",
-        body: JSON.stringify({ data }),
-      });
-      setStatus(`Auto-saved "${name}"`);
-    } catch (e) {
-      setStatus("Auto-save failed", "error");
-    }
-  }
 
   // ── Init ─────────────────────────────────────────────────────────────────────
   refreshGraphList();

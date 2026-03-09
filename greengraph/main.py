@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from greengraph.database import create_db_and_tables
+from greengraph.config import configure_global
 from greengraph.routes import graphs_router
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -14,13 +14,13 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    create_db_and_tables()
+    configure_global()
     yield
 
 
 app = FastAPI(
     title="GreenGraph",
-    description="A graph editor with LiteGraph.js frontend",
+    description="Graph editor backed by LiteGraph DB",
     version="0.1.0",
     lifespan=lifespan,
 )

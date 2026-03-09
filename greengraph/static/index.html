@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GreenGraph</title>
+  <script src="https://cdn.jsdelivr.net/npm/litegraph.js@0.7.18/build/litegraph.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/litegraph.js@0.7.18/css/litegraph.css" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      background: #1a1a1a;
+      color: #e0e0e0;
+      font-family: system-ui, sans-serif;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 16px;
+      background: #111;
+      border-bottom: 1px solid #333;
+      flex-shrink: 0;
+    }
+
+    header h1 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #4caf50;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .graph-selector {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-left: auto;
+    }
+
+    select, input[type="text"] {
+      background: #2a2a2a;
+      color: #e0e0e0;
+      border: 1px solid #444;
+      border-radius: 4px;
+      padding: 4px 8px;
+      font-size: 0.875rem;
+    }
+
+    button {
+      background: #2a2a2a;
+      color: #e0e0e0;
+      border: 1px solid #444;
+      border-radius: 4px;
+      padding: 4px 12px;
+      font-size: 0.875rem;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    button:hover { background: #3a3a3a; }
+
+    button.primary {
+      background: #2e7d32;
+      border-color: #4caf50;
+      color: #fff;
+    }
+
+    button.primary:hover { background: #388e3c; }
+
+    button.danger {
+      background: #7f1d1d;
+      border-color: #ef4444;
+    }
+
+    button.danger:hover { background: #991b1b; }
+
+    #canvas-container {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+
+    #graph-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    #status {
+      position: absolute;
+      bottom: 8px;
+      right: 12px;
+      font-size: 0.75rem;
+      color: #888;
+      pointer-events: none;
+    }
+
+    #status.ok { color: #4caf50; }
+    #status.error { color: #ef4444; }
+
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal-overlay.open { display: flex; }
+
+    .modal {
+      background: #222;
+      border: 1px solid #444;
+      border-radius: 8px;
+      padding: 24px;
+      min-width: 320px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .modal h2 { font-size: 1rem; }
+
+    .modal label { font-size: 0.875rem; color: #aaa; }
+
+    .modal input[type="text"],
+    .modal textarea {
+      width: 100%;
+      background: #1a1a1a;
+      color: #e0e0e0;
+      border: 1px solid #444;
+      border-radius: 4px;
+      padding: 6px 8px;
+      font-size: 0.875rem;
+      resize: vertical;
+    }
+
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>GreenGraph</h1>
+
+  <div class="toolbar">
+    <button onclick="addNode('basic/const')">+ Const</button>
+    <button onclick="addNode('basic/watch')">+ Watch</button>
+    <button onclick="graph.clear(); setStatus('Canvas cleared')">Clear</button>
+  </div>
+
+  <div class="graph-selector">
+    <select id="graph-select" onchange="loadSelectedGraph()">
+      <option value="">— new graph —</option>
+    </select>
+    <button onclick="openSaveModal()" class="primary">Save</button>
+    <button onclick="deleteCurrentGraph()" class="danger">Delete</button>
+  </div>
+</header>
+
+<div id="canvas-container">
+  <canvas id="graph-canvas"></canvas>
+  <div id="status">ready</div>
+</div>
+
+<!-- Save / rename modal -->
+<div id="save-modal" class="modal-overlay">
+  <div class="modal">
+    <h2>Save graph</h2>
+    <label>Name</label>
+    <input type="text" id="save-name" placeholder="My graph" />
+    <label>Description</label>
+    <input type="text" id="save-desc" placeholder="Optional description" />
+    <div class="modal-actions">
+      <button onclick="closeSaveModal()">Cancel</button>
+      <button class="primary" onclick="saveGraph()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── LiteGraph setup ─────────────────────────────────────────────────────────
+  LiteGraph.clearRegisteredTypes();
+  LiteGraph.registerNodeType("basic/const", class ConstNode extends LGraphNode {
+    constructor() {
+      super();
+      this.title = "Const";
+      this.addOutput("value", "number");
+      this.addProperty("value", 1);
+      this.addWidget("number", "value", 1, (v) => { this.properties.value = v; });
+      this.size = [140, 50];
+    }
+    onExecute() { this.setOutputData(0, this.properties.value); }
+  });
+
+  LiteGraph.registerNodeType("basic/watch", class WatchNode extends LGraphNode {
+    constructor() {
+      super();
+      this.title = "Watch";
+      this.addInput("value", 0);
+      this.size = [140, 50];
+    }
+    onExecute() {
+      this.setDirtyCanvas(true);
+      const v = this.getInputData(0);
+      this.title = "Watch: " + (v != null ? JSON.stringify(v) : "–");
+    }
+  });
+
+  const canvas = document.getElementById("graph-canvas");
+  const container = document.getElementById("canvas-container");
+
+  // Resize canvas to fill container
+  function resizeCanvas() {
+    canvas.width = container.clientWidth;
+    canvas.height = container.clientHeight;
+    lgCanvas.draw(true, true);
+  }
+
+  const graph = new LGraph();
+  const lgCanvas = new LGraphCanvas(canvas, graph);
+  lgCanvas.background_image = null;
+  lgCanvas.render_canvas_border = false;
+
+  graph.start();
+  window.addEventListener("resize", resizeCanvas);
+  resizeCanvas();
+
+  // ── State ────────────────────────────────────────────────────────────────────
+  let currentGraphId = null;
+
+  function setStatus(msg, type = "ok") {
+    const el = document.getElementById("status");
+    el.textContent = msg;
+    el.className = type;
+  }
+
+  function addNode(type) {
+    const node = LiteGraph.createNode(type);
+    node.pos = [100 + Math.random() * 400, 100 + Math.random() * 300];
+    graph.add(node);
+  }
+
+  // ── API helpers ──────────────────────────────────────────────────────────────
+  async function apiFetch(path, opts = {}) {
+    const res = await fetch(path, {
+      headers: { "Content-Type": "application/json" },
+      ...opts,
+    });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    if (res.status === 204) return null;
+    return res.json();
+  }
+
+  // ── Graph list ───────────────────────────────────────────────────────────────
+  async function refreshGraphList() {
+    try {
+      const graphs = await apiFetch("/api/graphs/");
+      const sel = document.getElementById("graph-select");
+      const prev = sel.value;
+      sel.innerHTML = '<option value="">— new graph —</option>';
+      for (const g of graphs) {
+        const opt = document.createElement("option");
+        opt.value = g.id;
+        opt.textContent = g.name;
+        sel.appendChild(opt);
+      }
+      if (currentGraphId) sel.value = currentGraphId;
+    } catch (e) {
+      setStatus("Failed to load graph list", "error");
+    }
+  }
+
+  async function loadSelectedGraph() {
+    const sel = document.getElementById("graph-select");
+    const id = sel.value;
+    if (!id) {
+      graph.clear();
+      currentGraphId = null;
+      setStatus("New graph");
+      return;
+    }
+    try {
+      const g = await apiFetch(`/api/graphs/${id}`);
+      graph.configure(g.data);
+      currentGraphId = g.id;
+      setStatus(`Loaded "${g.name}"`);
+    } catch (e) {
+      setStatus("Failed to load graph", "error");
+    }
+  }
+
+  // ── Save ─────────────────────────────────────────────────────────────────────
+  function openSaveModal() {
+    const sel = document.getElementById("graph-select");
+    const opt = sel.options[sel.selectedIndex];
+    document.getElementById("save-name").value =
+      currentGraphId ? opt.textContent : "";
+    document.getElementById("save-desc").value = "";
+    document.getElementById("save-modal").classList.add("open");
+    document.getElementById("save-name").focus();
+  }
+
+  function closeSaveModal() {
+    document.getElementById("save-modal").classList.remove("open");
+  }
+
+  async function saveGraph() {
+    const name = document.getElementById("save-name").value.trim();
+    if (!name) { alert("Please enter a name."); return; }
+    const description = document.getElementById("save-desc").value.trim();
+    const data = graph.serialize();
+
+    try {
+      if (currentGraphId) {
+        await apiFetch(`/api/graphs/${currentGraphId}`, {
+          method: "PUT",
+          body: JSON.stringify({ name, description, data }),
+        });
+        setStatus(`Saved "${name}"`);
+      } else {
+        const g = await apiFetch("/api/graphs/", {
+          method: "POST",
+          body: JSON.stringify({ name, description, data }),
+        });
+        currentGraphId = g.id;
+        setStatus(`Created "${name}"`);
+      }
+      closeSaveModal();
+      await refreshGraphList();
+      document.getElementById("graph-select").value = currentGraphId;
+    } catch (e) {
+      setStatus("Save failed: " + e.message, "error");
+    }
+  }
+
+  // ── Delete ───────────────────────────────────────────────────────────────────
+  async function deleteCurrentGraph() {
+    if (!currentGraphId) { setStatus("No graph selected", "error"); return; }
+    if (!confirm("Delete this graph?")) return;
+    try {
+      await apiFetch(`/api/graphs/${currentGraphId}`, { method: "DELETE" });
+      graph.clear();
+      currentGraphId = null;
+      setStatus("Deleted");
+      await refreshGraphList();
+    } catch (e) {
+      setStatus("Delete failed: " + e.message, "error");
+    }
+  }
+
+  // Close modal on overlay click
+  document.getElementById("save-modal").addEventListener("click", (e) => {
+    if (e.target === e.currentTarget) closeSaveModal();
+  });
+
+  // Auto-save shortcut
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+      e.preventDefault();
+      currentGraphId ? saveCurrentSilent() : openSaveModal();
+    }
+  });
+
+  async function saveCurrentSilent() {
+    const data = graph.serialize();
+    try {
+      const sel = document.getElementById("graph-select");
+      const name = sel.options[sel.selectedIndex].textContent;
+      await apiFetch(`/api/graphs/${currentGraphId}`, {
+        method: "PUT",
+        body: JSON.stringify({ data }),
+      });
+      setStatus(`Auto-saved "${name}"`);
+    } catch (e) {
+      setStatus("Auto-save failed", "error");
+    }
+  }
+
+  // ── Init ─────────────────────────────────────────────────────────────────────
+  refreshGraphList();
+</script>
+</body>
+</html>

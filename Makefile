@@ -129,6 +129,11 @@ db-shell: ## Open an interactive psql shell
 backup: ## Dump the full database to backups/
 	bash backup.sh
 
+.PHONY: ingest-zip
+ingest-zip: ## Ingest a Webhose news zip: make ingest-zip ZIP=path/to/file.zip
+	@test -n "$(ZIP)" || (echo "Usage: make ingest-zip ZIP=path/to/file.zip" && exit 1)
+	$(PYTHON) scripts/ingest_webhose_zip.py $(ZIP) $(ARGS)
+
 # =============================================================================
 # Testing
 # =============================================================================

@@ -157,17 +157,25 @@ def merge_graph_node(
     match_props: dict[str, Any],
     set_props: dict[str, Any] | None = None,
 ) -> None:
-    """MERGE a node (create if not exists) and optionally set additional properties."""
+    """MERGE a node (create if not exists) and optionally set additional properties.
+
+    AGE does not support ON CREATE SET inside MERGE, so extra properties are
+    applied via a subsequent MATCH ... SET query.
+    """
     load_age(conn)
     match_cypher = ", ".join(f"{k}: {_cypher_value(v)}" for k, v in match_props.items())
-    on_create = ""
+
+    # Step 1: MERGE on key properties only
+    cypher = f"MERGE (n:{label} {{{match_cypher}}})"
+    sql = f"SELECT * FROM cypher('{graph_name}', $$ {cypher} $$) AS (v agtype)"  # noqa: S608
+    conn.execute(sql)
+
+    # Step 2: SET extra properties (AGE supports SET but not ON CREATE SET)
     if set_props:
         set_pairs = ", ".join(f"n.{k} = {_cypher_value(v)}" for k, v in set_props.items())
-        on_create = f" ON CREATE SET {set_pairs}"
-
-    cypher = f"MERGE (n:{label} {{{match_cypher}}}){on_create}"
-    sql = f"SELECT * FROM cypher('{graph_name}', $$ {cypher} $$) AS (v agtype)"
-    conn.execute(sql)
+        cypher_set = f"MATCH (n:{label} {{{match_cypher}}}) SET {set_pairs}"
+        sql_set = f"SELECT * FROM cypher('{graph_name}', $$ {cypher_set} $$) AS (v agtype)"  # noqa: S608
+        conn.execute(sql_set)
 
 
 def _cypher_value(v: Any) -> str:

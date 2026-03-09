@@ -4,9 +4,10 @@ FROM postgres:16-bookworm
 ARG PGVECTOR_VERSION=0.8.0
 ARG AGE_VERSION=1.5.0
 
-# Install build dependencies
+# Install build dependencies (including CA certs for git clone over HTTPS)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    ca-certificates \
     git \
     postgresql-server-dev-16 \
     libreadline-dev \

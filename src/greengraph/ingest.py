@@ -198,18 +198,18 @@ def _insert_entities(
 
 
 def _extract_entities(text: str) -> list[dict[str, Any]]:
-    """Use Claude to extract named entities from text.
+    """Use OpenAI to extract named entities from text.
 
-    Falls back to an empty list if ANTHROPIC_API_KEY is not set.
+    Falls back to an empty list if OPENAI_API_KEY is not set.
     """
-    if not settings.anthropic_api_key:
-        log.debug("ANTHROPIC_API_KEY not set — skipping LLM entity extraction")
+    if not settings.openai_api_key:
+        log.debug("OPENAI_API_KEY not set — skipping LLM entity extraction")
         return []
 
     try:
-        import anthropic
+        from openai import OpenAI
 
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        client = OpenAI(api_key=settings.openai_api_key)
         prompt = (
             "Extract named entities from the following text. "
             "Return a JSON array where each element has: "
@@ -218,12 +218,13 @@ def _extract_entities(text: str) -> list[dict[str, Any]]:
             "Only return the JSON array, no explanation.\n\n"
             f"Text:\n{text[:3000]}"
         )
-        message = client.messages.create(
-            model=settings.claude_model,
+        response = client.chat.completions.create(
+            model=settings.openai_chat_model,
             max_tokens=1024,
             messages=[{"role": "user", "content": prompt}],
         )
-        content = message.content[0].text.strip()
+        content = response.choices[0].message.content or ""
+        content = content.strip()
         # Strip markdown code fences if present
         if content.startswith("```"):
             content = content.split("```")[1]

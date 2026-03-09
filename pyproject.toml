@@ -5,7 +5,6 @@ description = "Context Graph for RAG Retrieval — PostgreSQL + pgvector + Apach
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "anthropic>=0.40.0",
     "openai>=1.50.0",
     "psycopg[binary]>=3.1.0",
     "pydantic>=2.0.0",

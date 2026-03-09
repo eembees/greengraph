@@ -174,25 +174,26 @@ class TestIngestDocument:
 class TestExtractEntities:
     def test_returns_empty_without_api_key(self) -> None:
         with patch("greengraph.ingest.settings") as mock_settings:
-            mock_settings.anthropic_api_key = None
+            mock_settings.openai_api_key = None
             from greengraph.ingest import _extract_entities
 
             result = _extract_entities("Alice works at Acme Corp.")
         assert result == []
 
     def test_returns_entities_from_llm(self) -> None:
-        mock_message = MagicMock()
-        mock_message.content = [
-            MagicMock(text='[{"name": "Alice", "type": "person", "properties": {}}]')
-        ]
+        mock_choice = MagicMock()
+        mock_choice.message.content = '[{"name": "Alice", "type": "person", "properties": {}}]'
+
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
 
         mock_client = MagicMock()
-        mock_client.messages.create.return_value = mock_message
+        mock_client.chat.completions.create.return_value = mock_response
 
         with patch("greengraph.ingest.settings") as mock_settings:
-            mock_settings.anthropic_api_key = "sk-ant-test"
-            mock_settings.claude_model = "claude-sonnet-4-6"
-            with patch("anthropic.Anthropic", return_value=mock_client):
+            mock_settings.openai_api_key = "sk-test"
+            mock_settings.openai_chat_model = "gpt-4o-mini"
+            with patch("openai.OpenAI", return_value=mock_client):
                 from greengraph.ingest import _extract_entities
 
                 result = _extract_entities("Alice works at Acme Corp.")
@@ -203,9 +204,9 @@ class TestExtractEntities:
 
     def test_gracefully_handles_llm_error(self) -> None:
         with patch("greengraph.ingest.settings") as mock_settings:
-            mock_settings.anthropic_api_key = "sk-ant-test"
-            mock_settings.claude_model = "claude-sonnet-4-6"
-            with patch("anthropic.Anthropic", side_effect=Exception("API error")):
+            mock_settings.openai_api_key = "sk-test"
+            mock_settings.openai_chat_model = "gpt-4o-mini"
+            with patch("openai.OpenAI", side_effect=Exception("API error")):
                 from greengraph.ingest import _extract_entities
 
                 result = _extract_entities("Some text")

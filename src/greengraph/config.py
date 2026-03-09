@@ -34,8 +34,7 @@ class Settings(BaseSettings):
     openai_api_key: str | None = Field(default=None)
 
     # --- LLM (entity extraction) ---
-    anthropic_api_key: str | None = Field(default=None)
-    claude_model: str = Field(default="claude-sonnet-4-6")
+    openai_chat_model: str = Field(default="gpt-4o-mini")
 
     # --- Ingestion ---
     chunk_size: int = Field(default=512, description="Target chunk size in characters")

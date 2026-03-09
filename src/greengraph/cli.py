@@ -1,0 +1,233 @@
+"""Command-line interface for greengraph."""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Annotated, Any
+
+import typer
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+
+from greengraph.config import settings
+
+app = typer.Typer(
+    name="greengraph",
+    help="Context Graph for RAG Retrieval — PostgreSQL + pgvector + Apache AGE",
+    no_args_is_help=True,
+)
+console = Console()
+err_console = Console(stderr=True)
+
+db_app = typer.Typer(help="Database management commands")
+app.add_typer(db_app, name="db")
+
+logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
+
+
+# ---------------------------------------------------------------------------
+# DB sub-commands
+# ---------------------------------------------------------------------------
+
+
+@db_app.command("status")
+def db_status() -> None:
+    """Check database connectivity and extension status."""
+    from greengraph.db import fetchall, fetchone
+
+    try:
+        row = fetchone("SELECT version() AS v")
+        assert row is not None
+        console.print(Panel(f"[green]Connected[/green]\n{row['v']}", title="PostgreSQL"))
+
+        exts = fetchall(
+            "SELECT name, default_version FROM pg_available_extensions WHERE installed_version IS NOT NULL ORDER BY name"  # noqa: E501
+        )
+        t = Table("Extension", "Version", title="Installed Extensions")
+        for ext in exts:
+            t.add_row(ext["name"], ext.get("default_version") or "")
+        console.print(t)
+
+        graphs = fetchall("SELECT name FROM ag_catalog.ag_graph")
+        if graphs:
+            console.print(f"[green]AGE graph(s):[/green] {', '.join(r['name'] for r in graphs)}")
+        else:
+            console.print("[yellow]No AGE graphs found[/yellow]")
+
+    except Exception as exc:
+        err_console.print(f"[red]Connection failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+
+@db_app.command("init")
+def db_init(
+    force: Annotated[bool, typer.Option("--force", help="Drop and recreate schema")] = False,
+) -> None:
+    """Apply the initialization SQL schema to the connected database.
+
+    Normally you should let Docker run init/01-init-extensions.sql automatically.
+    Use this command when connecting to an existing PostgreSQL instance.
+    """
+    init_sql = Path(__file__).parent.parent.parent / "init" / "01-init-extensions.sql"
+    if not init_sql.exists():
+        err_console.print(f"[red]Init SQL not found:[/red] {init_sql}")
+        raise typer.Exit(1)
+
+    from greengraph.db import execute
+
+    if force:
+        console.print("[yellow]Dropping existing schema...[/yellow]")
+        execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+
+    sql = init_sql.read_text()
+    try:
+        execute(sql)
+        console.print("[green]Database initialized successfully.[/green]")
+    except Exception as exc:
+        err_console.print(f"[red]Init failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+
+# ---------------------------------------------------------------------------
+# Ingest command
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def ingest(
+    path: Annotated[Path, typer.Argument(help="Path to a text, markdown, or PDF file to ingest")],
+    title: Annotated[str | None, typer.Option("--title", "-t", help="Document title")] = None,
+    source_url: Annotated[str | None, typer.Option("--url", "-u", help="Source URL")] = None,
+    skip_graph: Annotated[bool, typer.Option("--skip-graph", help="Skip AGE graph sync")] = False,
+    skip_entities: Annotated[
+        bool, typer.Option("--skip-entities", help="Skip entity extraction")
+    ] = False,
+    metadata: Annotated[
+        str | None,
+        typer.Option("--metadata", "-m", help='JSON metadata string, e.g. \'{"category":"tech"}\''),
+    ] = None,
+) -> None:
+    """Ingest a document into the context graph."""
+    if not path.exists():
+        err_console.print(f"[red]File not found:[/red] {path}")
+        raise typer.Exit(1)
+
+    import json
+
+    from greengraph.ingest import ingest_document
+    from greengraph.models import DocumentCreate
+
+    content = path.read_text(encoding="utf-8", errors="replace")
+    meta: dict[str, Any] = {}
+    if metadata:
+        try:
+            meta = json.loads(metadata)
+        except json.JSONDecodeError as exc:
+            err_console.print(f"[red]Invalid JSON metadata:[/red] {exc}")
+            raise typer.Exit(1) from exc
+
+    doc = DocumentCreate(
+        title=title or path.stem,
+        content=content,
+        source_url=source_url or str(path.resolve()),
+        metadata=meta,
+    )
+
+    with console.status(f"Ingesting [bold]{doc.title}[/bold]..."):
+        result = ingest_document(doc, skip_graph=skip_graph, skip_entities=skip_entities)
+
+    if result.skipped:
+        console.print(f"[yellow]Skipped:[/yellow] {result.skip_reason}")
+    else:
+        console.print(
+            Panel(
+                f"Document ID:  {result.document_id}\n"
+                f"Chunks:       {result.chunks_created}\n"
+                f"Entities:     {result.entities_extracted}\n"
+                f"Relationships:{result.relationships_created}",
+                title=f"[green]Ingested: {result.title}[/green]",
+            )
+        )
+
+
+# ---------------------------------------------------------------------------
+# Retrieve command
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def retrieve(
+    query: Annotated[str, typer.Argument(help="Natural-language query")],
+    top_k: Annotated[int, typer.Option("--top-k", "-k")] = 5,
+    threshold: Annotated[float, typer.Option("--threshold")] = 0.7,
+    no_graph: Annotated[
+        bool, typer.Option("--no-graph", help="Skip graph context expansion")
+    ] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Output raw JSON")] = False,
+) -> None:
+    """Retrieve relevant chunks for a query using vector + graph search."""
+    from greengraph.retrieve import retrieve as do_retrieve
+
+    with console.status("Retrieving..."):
+        result = do_retrieve(
+            query,
+            top_k=top_k,
+            similarity_threshold=threshold,
+            include_graph_context=not no_graph,
+        )
+
+    if json_output:
+        import json
+
+        console.print(json.dumps(result.model_dump(), indent=2))
+        return
+
+    if not result.chunks:
+        console.print("[yellow]No results found above the similarity threshold.[/yellow]")
+        return
+
+    console.print(Panel(f"[bold]{query}[/bold]", title="Query"))
+    for i, chunk in enumerate(result.chunks, 1):
+        graph_info = ""
+        if chunk.graph_context:
+            lines = [
+                f"  {c.entity} --[{c.relationship}]--> {c.connected_entity}"
+                for c in chunk.graph_context[:3]
+            ]
+            graph_info = "\n[dim]Graph context:[/dim]\n" + "\n".join(lines)
+        console.print(
+            Panel(
+                f"{chunk.content[:500]}{'...' if len(chunk.content) > 500 else ''}{graph_info}",
+                title=f"[cyan]#{i}[/cyan] chunk_id={chunk.chunk_id} sim={chunk.similarity:.3f}",
+            )
+        )
+
+
+# ---------------------------------------------------------------------------
+# Config command
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def config() -> None:
+    """Show the current runtime configuration."""
+    t = Table("Setting", "Value", title="Configuration")
+    for field_name in settings.model_fields:
+        value = getattr(settings, field_name)
+        # Redact secrets
+        if any(secret in field_name for secret in ("password", "api_key", "secret")):
+            display = "***" if value else "(not set)"
+        else:
+            display = str(value)
+        t.add_row(field_name, display)
+    console.print(t)
+
+
+def main() -> None:
+    app()
+
+
+if __name__ == "__main__":
+    main()

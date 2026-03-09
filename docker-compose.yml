@@ -1,0 +1,44 @@
+version: "3.9"
+
+services:
+  context-graph-db:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: context-graph-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: context_graph_db
+      POSTGRES_USER: context_graph
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_in_production}
+    ports:
+      - "${PG_PORT:-5432}:5432"
+    volumes:
+      # Persistent data volume
+      - pgdata:/var/lib/postgresql/data
+      # Custom config overlay
+      - ./config/postgresql.conf:/etc/postgresql/custom.conf:ro
+      # Backup mount
+      - ./backups:/backups
+    command: >
+      postgres
+        -c config_file=/etc/postgresql/custom.conf
+        -c shared_preload_libraries='age'
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+          cpus: "4.0"
+        reservations:
+          memory: 4G
+          cpus: "2.0"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U context_graph -d context_graph_db"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  pgdata:
+    driver: local

@@ -110,6 +110,9 @@ def ingest(
     skip_entities: Annotated[
         bool, typer.Option("--skip-entities", help="Skip entity extraction")
     ] = False,
+    skip_geo: Annotated[
+        bool, typer.Option("--skip-geo", help="Skip ISO 3166 geo-tagging")
+    ] = False,
     metadata: Annotated[
         str | None,
         typer.Option("--metadata", "-m", help='JSON metadata string, e.g. \'{"category":"tech"}\''),
@@ -142,7 +145,9 @@ def ingest(
     )
 
     with console.status(f"Ingesting [bold]{doc.title}[/bold]..."):
-        result = ingest_document(doc, skip_graph=skip_graph, skip_entities=skip_entities)
+        result = ingest_document(
+            doc, skip_graph=skip_graph, skip_entities=skip_entities, skip_geo=skip_geo
+        )
 
     if result.skipped:
         console.print(f"[yellow]Skipped:[/yellow] {result.skip_reason}")

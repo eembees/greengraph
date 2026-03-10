@@ -32,6 +32,7 @@ dev = [
     "pytest-mock>=3.14.0",
     "ruff>=0.8.0",
     "ty>=0.0.1a6",
+    "pycountry>=24.6.1",
 ]
 
 # --- Ruff ---
@@ -64,6 +65,8 @@ ignore = [
 "src/greengraph/db.py" = ["S608"]
 "src/greengraph/ingest.py" = ["S608"]
 "src/greengraph/retrieve.py" = ["S608", "E501"]
+"src/greengraph/geo_tagger.py" = ["S608"]
+"scripts/backfill_geo_tags.py" = ["S608", "ANN"]
 
 [tool.ruff.format]
 quote-style = "double"

@@ -5,7 +5,8 @@ Stages:
   2. Chunking — split content into overlapping text chunks.
   3. Embedding — batch-embed chunks via the configured backend.
   4. Entity extraction — use Claude (LLM-based NER) to extract named entities.
-  5. Graph sync — create AGE nodes and edges for documents, chunks, entities.
+  5. Geo-tagging — detect ISO 3166 country/region codes and tag the document.
+  6. Graph sync — create AGE nodes and edges for documents, chunks, entities.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from greengraph.chunker import split_text
 from greengraph.config import settings
 from greengraph.db import get_conn, load_age, merge_graph_node
 from greengraph.embeddings import EmbeddingBackend, embed_texts, get_backend
+from greengraph.geo_tagger import detect_geo_entities, tag_document_in_graph
 from greengraph.models import DocumentCreate, IngestionResult
 
 log = logging.getLogger(__name__)
@@ -36,6 +38,7 @@ def ingest_document(
     *,
     skip_graph: bool = False,
     skip_entities: bool = False,
+    skip_geo: bool = False,
 ) -> IngestionResult:
     """Ingest a single document through the full pipeline.
 
@@ -44,6 +47,7 @@ def ingest_document(
         embedding_backend: Optional custom embedding backend (uses configured default).
         skip_graph: If True, skip Apache AGE graph sync (useful when AGE is not available).
         skip_entities: If True, skip entity extraction.
+        skip_geo: If True, skip ISO 3166 geo-tagging step.
 
     Returns:
         IngestionResult summarising what was created.
@@ -82,7 +86,27 @@ def ingest_document(
             entities_extracted = len(entity_ids)
             entity_records = list(zip(raw_entities, entity_ids, strict=True))
 
-        # Stage 5: Graph sync
+        # Stage 5: Geo-tagging (ISO 3166 country + region detection)
+        if not skip_geo:
+            geo_text = " ".join(chunk_texts)  # use full document text for geo detection
+            country_codes, region_codes = detect_geo_entities(geo_text, conn)
+            if country_codes or region_codes:
+                log.info(
+                    "Geo-tagged doc %d: %d countries, %d regions",
+                    doc_id,
+                    len(country_codes),
+                    len(region_codes),
+                )
+                if not skip_graph:
+                    try:
+                        tag_document_in_graph(conn, doc_id, country_codes, region_codes)
+                    except Exception as exc:
+                        log.warning("Geo graph tagging failed for doc %d: %s", doc_id, exc)
+                else:
+                    # Still update relational metadata even when skipping graph
+                    _update_geo_metadata(conn, doc_id, country_codes, region_codes)
+
+        # Stage 6: Graph sync
         if not skip_graph:
             try:
                 load_age(conn)
@@ -321,3 +345,22 @@ def _create_edge_if_not_exists(
 def _format_vector(embedding: list[float]) -> str:
     """Format a Python float list as a pgvector literal string."""
     return "[" + ",".join(str(x) for x in embedding) + "]"
+
+
+def _update_geo_metadata(
+    conn: psycopg.Connection[Any],
+    doc_id: int,
+    country_codes: list[str],
+    region_codes: list[str],
+) -> None:
+    """Write geo-tag lists into documents.metadata without touching AGE."""
+    conn.execute(
+        """
+        UPDATE documents
+        SET metadata = metadata
+            || jsonb_build_object('geo_countries', %s::jsonb)
+            || jsonb_build_object('geo_regions',   %s::jsonb)
+        WHERE id = %s
+        """,
+        (json.dumps(country_codes), json.dumps(region_codes), doc_id),
+    )

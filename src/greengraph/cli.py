@@ -247,6 +247,24 @@ def graph_export(
             s = s[: s.rfind("::")]
         return json.loads(s)
 
+    def node_key(node: dict[str, Any]) -> str:
+        """Stable, unique, human-readable node key: '<Label>_<relational_id>'.
+
+        Using AGE internal IDs as networkx keys risks silent mismatches between
+        the node query and edge start_id/end_id values. Compound string keys
+        derived from the relational id are unique across labels and survive
+        round-trips through GEXF without integer-overflow issues in Gephi.
+        """
+        kind = node.get("label", "Unknown")
+        props = node.get("properties", {})
+        return f"{kind}_{props.get('id', node['id'])}"
+
+    def add_node_to_graph(G: nx.DiGraph, node: dict[str, Any]) -> None:  # noqa: N803
+        kind = node.get("label", "Unknown")
+        props = node.get("properties", {})
+        display = props.get("name") or props.get("title") or str(props.get("id", node["id"]))
+        G.add_node(node_key(node), label=display, kind=kind, **{k: str(v) for k, v in props.items()})
+
     limit_clause = f" LIMIT {limit}" if limit else ""
     G: nx.DiGraph = nx.DiGraph()
 
@@ -254,30 +272,30 @@ def graph_export(
         with get_conn() as conn:
             load_age(conn)
 
-            # --- Nodes ---
-            node_rows = conn.execute(
+            # Single query returns nodes and edges together so IDs are guaranteed
+            # consistent — no risk of start_id/end_id not matching node query IDs.
+            edge_rows = conn.execute(
+                f"SELECT * FROM cypher('{graph_name}', $$"
+                f" MATCH (a)-[r]->(b) RETURN a, r, b{limit_clause}"
+                f" $$) AS (a agtype, r agtype, b agtype)"
+            ).fetchall()
+            for row in edge_rows:
+                a = parse_agtype(row["a"])
+                r = parse_agtype(row["r"])
+                b = parse_agtype(row["b"])
+                add_node_to_graph(G, a)
+                add_node_to_graph(G, b)
+                G.add_edge(node_key(a), node_key(b), label=r.get("label", ""))
+
+            # Isolated nodes (not connected to any edge) need a separate pass.
+            all_node_rows = conn.execute(
                 f"SELECT * FROM cypher('{graph_name}', $$"
                 f" MATCH (n) RETURN n{limit_clause}"
                 f" $$) AS (n agtype)"
             ).fetchall()
-            for row in node_rows:
+            for row in all_node_rows:
                 node = parse_agtype(row["n"])
-                age_id: int = node["id"]
-                kind: str = node.get("label", "Unknown")
-                props: dict[str, Any] = node.get("properties", {})
-                # Pick a human-readable display label
-                display = props.get("name") or props.get("title") or str(props.get("id", age_id))
-                G.add_node(age_id, label=display, kind=kind, **{k: str(v) for k, v in props.items()})
-
-            # --- Edges ---
-            edge_rows = conn.execute(
-                f"SELECT * FROM cypher('{graph_name}', $$"
-                f" MATCH ()-[r]->() RETURN r{limit_clause}"
-                f" $$) AS (r agtype)"
-            ).fetchall()
-            for row in edge_rows:
-                edge = parse_agtype(row["r"])
-                G.add_edge(edge["start_id"], edge["end_id"], label=edge.get("label", ""))
+                add_node_to_graph(G, node)  # no-op if already added
 
     nx.write_gexf(G, output)
 

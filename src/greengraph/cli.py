@@ -121,11 +121,11 @@ def ingest(
         raise typer.Exit(1)
 
     import json
+    import zipfile
 
     from greengraph.ingest import ingest_document
     from greengraph.models import DocumentCreate
 
-    content = path.read_text(encoding="utf-8", errors="replace")
     meta: dict[str, Any] = {}
     if metadata:
         try:
@@ -134,28 +134,50 @@ def ingest(
             err_console.print(f"[red]Invalid JSON metadata:[/red] {exc}")
             raise typer.Exit(1) from exc
 
-    doc = DocumentCreate(
-        title=title or path.stem,
-        content=content,
-        source_url=source_url or str(path.resolve()),
-        metadata=meta,
-    )
-
-    with console.status(f"Ingesting [bold]{doc.title}[/bold]..."):
-        result = ingest_document(doc, skip_graph=skip_graph, skip_entities=skip_entities)
-
-    if result.skipped:
-        console.print(f"[yellow]Skipped:[/yellow] {result.skip_reason}")
-    else:
-        console.print(
-            Panel(
-                f"Document ID:  {result.document_id}\n"
-                f"Chunks:       {result.chunks_created}\n"
-                f"Entities:     {result.entities_extracted}\n"
-                f"Relationships:{result.relationships_created}",
-                title=f"[green]Ingested: {result.title}[/green]",
-            )
+    def _ingest_one(doc_title: str, content: str, src_url: str) -> None:
+        doc = DocumentCreate(
+            title=doc_title,
+            content=content,
+            source_url=src_url,
+            metadata=meta,
         )
+        with console.status(f"Ingesting [bold]{doc.title}[/bold]..."):
+            result = ingest_document(doc, skip_graph=skip_graph, skip_entities=skip_entities)
+        if result.skipped:
+            console.print(f"[yellow]Skipped:[/yellow] {doc.title} — {result.skip_reason}")
+        else:
+            console.print(
+                Panel(
+                    f"Document ID:  {result.document_id}\n"
+                    f"Chunks:       {result.chunks_created}\n"
+                    f"Entities:     {result.entities_extracted}\n"
+                    f"Relationships:{result.relationships_created}",
+                    title=f"[green]Ingested: {result.title}[/green]",
+                )
+            )
+
+    if zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as zf:
+            members = [m for m in zf.infolist() if not m.is_dir()]
+            if not members:
+                err_console.print("[yellow]ZIP archive contains no files.[/yellow]")
+                raise typer.Exit(1)
+            console.print(f"[dim]ZIP archive: {len(members)} file(s)[/dim]")
+            for member in members:
+                try:
+                    content = zf.read(member.filename).decode("utf-8", errors="replace")
+                except Exception as exc:
+                    err_console.print(f"[yellow]Skipping {member.filename}:[/yellow] {exc}")
+                    continue
+                member_path = Path(member.filename)
+                doc_title = title or member_path.stem
+                if len(members) > 1:
+                    doc_title = f"{title or path.stem}/{member_path.stem}"
+                src_url = source_url or f"{path.resolve()}!{member.filename}"
+                _ingest_one(doc_title, content, src_url)
+    else:
+        content = path.read_text(encoding="utf-8", errors="replace")
+        _ingest_one(title or path.stem, content, source_url or str(path.resolve()))
 
 
 # ---------------------------------------------------------------------------

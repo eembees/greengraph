@@ -88,8 +88,13 @@ class OpenAIEmbeddingBackend(EmbeddingBackend):
     def embed(self, texts: list[str]) -> list[list[float]]:
         # Strip newlines per OpenAI recommendation
         cleaned = [t.replace("\n", " ") for t in texts]
-        response = self._client.embeddings.create(input=cleaned, model=self._model)
-        return [item.embedding for item in response.data]
+        results: list[list[float]] = []
+        batch_size = settings.ingestion_batch_size
+        for i in range(0, len(cleaned), batch_size):
+            batch = cleaned[i : i + batch_size]
+            response = self._client.embeddings.create(input=batch, model=self._model)
+            results.extend(item.embedding for item in response.data)
+        return results
 
 
 def get_embedding_backend() -> EmbeddingBackend:

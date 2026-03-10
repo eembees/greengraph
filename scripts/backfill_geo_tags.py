@@ -62,8 +62,10 @@ def backfill(
     """
     counts = {"processed": 0, "tagged": 0, "skipped": 0, "errors": 0}
 
+    # Step 1: Fetch the document list in a short-lived connection.
+    # Keeping this separate ensures the query connection is clean before we
+    # start mutating rows.
     with get_conn() as conn:
-        # Build document query
         if doc_id is not None:
             where = "WHERE id = %s"
             params: tuple[object, ...] = (doc_id,)
@@ -80,18 +82,23 @@ def backfill(
             params,
         ).fetchall()
 
-        if not rows:
-            log.info("No documents to process.")
-            return counts
+    if not rows:
+        log.info("No documents to process.")
+        return counts
 
-        log.info("Processing %d document(s)...", len(rows))
+    log.info("Processing %d document(s)...", len(rows))
 
-        for row in rows:
-            d_id: int = row["id"]
-            title: str = row["title"]
-            counts["processed"] += 1
+    # Step 2: Process each document in its own connection + transaction.
+    # A PostgreSQL error in one document (e.g. a Cypher failure) would abort
+    # the whole transaction if we shared one connection across all documents.
+    # Using a fresh connection per document ensures failures are isolated.
+    for row in rows:
+        d_id: int = row["id"]
+        title: str = row["title"]
+        counts["processed"] += 1
 
-            try:
+        try:
+            with get_conn() as conn:
                 text = _reconstruct_text(conn, d_id)
                 if not text.strip():
                     log.warning("doc %d (%s): no chunk content found, skipping", d_id, title)
@@ -137,9 +144,9 @@ def backfill(
 
                 counts["tagged"] += 1
 
-            except Exception as exc:
-                log.error("doc %d (%s): error — %s", d_id, title, exc)
-                counts["errors"] += 1
+        except Exception as exc:
+            log.error("doc %d (%s): error — %s", d_id, title, exc)
+            counts["errors"] += 1
 
     return counts
 

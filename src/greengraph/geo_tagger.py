@@ -66,12 +66,15 @@ def _ensure_loaded(conn: psycopg.Connection[Any]) -> None:
         return  # already loaded
 
     try:
-        country_rows = conn.execute(
-            "SELECT code, name FROM iso3166_countries ORDER BY code"
-        ).fetchall()
-        region_rows = conn.execute(
-            "SELECT code, country_code, name FROM iso3166_regions ORDER BY code"
-        ).fetchall()
+        # Use a nested transaction (SAVEPOINT) so that a missing-table error
+        # doesn't abort the outer transaction and block all subsequent queries.
+        with conn.transaction():
+            country_rows = conn.execute(
+                "SELECT code, name FROM iso3166_countries ORDER BY code"
+            ).fetchall()
+            region_rows = conn.execute(
+                "SELECT code, country_code, name FROM iso3166_regions ORDER BY code"
+            ).fetchall()
     except Exception as exc:
         log.warning(
             "iso3166 tables not found — geo-tagging disabled. "

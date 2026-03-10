@@ -93,6 +93,12 @@ def ingest_document(
                         conn, doc_id, chunk_ids, entity_records
                     )
                     relationships_created = rel_count
+                # Derive edges: CONTAINS, MENTIONS, MENTIONED_TOGETHER_WITH
+                row = conn.execute(
+                    "SELECT public.sync_graph_edges(%s) AS result", (doc_id,)
+                ).fetchone()
+                if row:
+                    log.debug("sync_graph_edges: %s", row["result"])
             except Exception as exc:
                 log.warning("Graph sync failed (AGE may not be available): %s", exc)
 

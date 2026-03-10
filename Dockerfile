@@ -2,7 +2,7 @@ FROM postgres:16-bookworm
 
 # Build arguments for extension versions
 ARG PGVECTOR_VERSION=0.8.0
-ARG AGE_VERSION=1.5.0
+ARG AGE_TAG=PG16/v1.5.0-rc0
 
 # Install build dependencies (including CA certs for git clone over HTTPS)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -24,7 +24,7 @@ RUN git clone --branch v${PGVECTOR_VERSION} https://github.com/pgvector/pgvector
     && rm -rf /tmp/pgvector
 
 # Build and install Apache AGE
-RUN git clone --branch v${AGE_VERSION}-rc0 https://github.com/apache/age.git /tmp/age \
+RUN git clone --branch ${AGE_TAG} https://github.com/apache/age.git /tmp/age \
     && cd /tmp/age \
     && make \
     && make install \

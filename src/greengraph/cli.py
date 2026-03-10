@@ -27,6 +27,9 @@ app.add_typer(db_app, name="db")
 graph_app = typer.Typer(help="Graph inspection and export commands")
 app.add_typer(graph_app, name="graph")
 
+entity_app = typer.Typer(help="Entity management commands")
+app.add_typer(entity_app, name="entities")
+
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
 
@@ -213,6 +216,41 @@ def retrieve(
 # ---------------------------------------------------------------------------
 
 
+@graph_app.command("sync-edges")
+def graph_sync_edges(
+    doc_id: Annotated[
+        int | None,
+        typer.Option("--doc-id", "-d", help="Only sync this document ID. Omit for all documents."),
+    ] = None,
+) -> None:
+    """Sync derived graph edges for all documents (or a single one).
+
+    Creates / refreshes:
+      Document -[CONTAINS]-> Chunk
+      Document -[MENTIONS]-> Entity
+      Entity   -[MENTIONED_TOGETHER_WITH]-> Entity
+
+    All edges are MERGE'd so the command is safe to re-run.
+    """
+    from greengraph.db import fetchone
+
+    with console.status("Syncing graph edges..."):
+        try:
+            row = fetchone("SELECT public.sync_graph_edges(%s) AS result", (doc_id,))
+        except Exception as exc:
+            err_console.print(f"[red]sync_graph_edges failed:[/red] {exc}")
+            raise typer.Exit(1) from exc
+
+    result = row["result"] if row else {}
+    console.print(
+        Panel(
+            f"Docs processed:  {result.get('docs_processed', '?')}\n"
+            f"CONTAINS edges:  {result.get('contains_edges', '?')}",
+            title="[green]Graph edges synced[/green]",
+        )
+    )
+
+
 @graph_app.command("export")
 def graph_export(
     output: Annotated[Path, typer.Argument(help="Output GEXF file (default: context_graph.gexf)")]
@@ -263,7 +301,7 @@ def graph_export(
         kind = node.get("label", "Unknown")
         props = node.get("properties", {})
         display = props.get("name") or props.get("title") or str(props.get("id", node["id"]))
-        G.add_node(node_key(node), label=display, kind=kind, **{k: str(v) for k, v in props.items()})
+        G.add_node(node_key(node), label=display, kind=kind, **{k: str(v) for k, v in props.items() if k != "id"})
 
     limit_clause = f" LIMIT {limit}" if limit else ""
     G: nx.DiGraph = nx.DiGraph()
@@ -328,6 +366,58 @@ def config() -> None:
             display = str(value)
         t.add_row(field_name, display)
     console.print(t)
+
+
+# ---------------------------------------------------------------------------
+# Entity sub-commands
+# ---------------------------------------------------------------------------
+
+
+@entity_app.command("dedup")
+def entity_dedup(
+    strategy: Annotated[
+        str,
+        typer.Option(
+            "--strategy",
+            "-s",
+            help="Deduplication strategy: 'string' (default) or 'embedding' (not yet implemented).",
+        ),
+    ] = "string",
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Report duplicates without making changes."),
+    ] = False,
+) -> None:
+    """Deduplicate entities in the graph database.
+
+    String strategy: merges entities with the same name (case-insensitive,
+    trimmed) and type.  The entity with the lowest id is kept as canonical;
+    duplicates are removed and their graph edges are redirected.
+    """
+    from greengraph.dedup import dedup_entities
+
+    label = "[dim](dry run)[/dim] " if dry_run else ""
+    with console.status(f"{label}Deduplicating entities ({strategy})..."):
+        try:
+            result = dedup_entities(strategy=strategy, dry_run=dry_run)
+        except NotImplementedError as exc:
+            err_console.print(f"[yellow]Not implemented:[/yellow] {exc}")
+            raise typer.Exit(1) from exc
+        except Exception as exc:
+            err_console.print(f"[red]Deduplication failed:[/red] {exc}")
+            raise typer.Exit(1) from exc
+
+    title = "[green]Deduplication complete[/green]"
+    if result["dry_run"]:
+        title = "[yellow]Dry run — no changes made[/yellow]"
+
+    console.print(
+        Panel(
+            f"Duplicate groups found: {result['groups_found']}\n"
+            f"Entities merged:        {result['entities_merged']}",
+            title=title,
+        )
+    )
 
 
 def main() -> None:

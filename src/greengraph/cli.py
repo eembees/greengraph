@@ -156,28 +156,8 @@ def ingest(
                 )
             )
 
-    if zipfile.is_zipfile(path):
-        with zipfile.ZipFile(path) as zf:
-            members = [m for m in zf.infolist() if not m.is_dir()]
-            if not members:
-                err_console.print("[yellow]ZIP archive contains no files.[/yellow]")
-                raise typer.Exit(1)
-            console.print(f"[dim]ZIP archive: {len(members)} file(s)[/dim]")
-            for member in members:
-                try:
-                    content = zf.read(member.filename).decode("utf-8", errors="replace")
-                except Exception as exc:
-                    err_console.print(f"[yellow]Skipping {member.filename}:[/yellow] {exc}")
-                    continue
-                member_path = Path(member.filename)
-                doc_title = title or member_path.stem
-                if len(members) > 1:
-                    doc_title = f"{title or path.stem}/{member_path.stem}"
-                src_url = source_url or f"{path.resolve()}!{member.filename}"
-                _ingest_one(doc_title, content, src_url)
-    else:
-        content = path.read_text(encoding="utf-8", errors="replace")
-        _ingest_one(title or path.stem, content, source_url or str(path.resolve()))
+    content = path.read_text(encoding="utf-8", errors="replace")
+    _ingest_one(title or path.stem, content, source_url or str(path.resolve()))
 
 
 # ---------------------------------------------------------------------------

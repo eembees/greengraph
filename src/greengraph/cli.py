@@ -24,6 +24,9 @@ err_console = Console(stderr=True)
 db_app = typer.Typer(help="Database management commands")
 app.add_typer(db_app, name="db")
 
+graph_app = typer.Typer(help="Graph inspection and export commands")
+app.add_typer(graph_app, name="graph")
+
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
 
@@ -203,6 +206,90 @@ def retrieve(
                 title=f"[cyan]#{i}[/cyan] chunk_id={chunk.chunk_id} sim={chunk.similarity:.3f}",
             )
         )
+
+
+# ---------------------------------------------------------------------------
+# Graph sub-commands
+# ---------------------------------------------------------------------------
+
+
+@graph_app.command("export")
+def graph_export(
+    output: Annotated[Path, typer.Argument(help="Output GEXF file (default: context_graph.gexf)")]
+    = Path("context_graph.gexf"),
+    graph_name: Annotated[
+        str, typer.Option("--graph", "-g", help="AGE graph name")
+    ] = settings.graph_name,
+    limit: Annotated[
+        int, typer.Option("--limit", help="Max nodes/edges to fetch (0 = all)")
+    ] = 0,
+) -> None:
+    """Export the AGE graph to GEXF format for visualisation in Gephi.
+
+    Example:
+        greengraph graph export my_graph.gexf
+        gephi my_graph.gexf
+    """
+    import json
+
+    try:
+        import networkx as nx
+    except ImportError:
+        err_console.print("[red]networkx is required:[/red] pip install networkx")
+        raise typer.Exit(1)
+
+    from greengraph.db import get_conn, load_age
+
+    def parse_agtype(raw: Any) -> dict[str, Any]:
+        """Strip AGE type annotation (::vertex / ::edge) and parse JSON."""
+        s = str(raw)
+        if "::" in s:
+            s = s[: s.rfind("::")]
+        return json.loads(s)
+
+    limit_clause = f" LIMIT {limit}" if limit else ""
+    G: nx.DiGraph = nx.DiGraph()
+
+    with console.status("Fetching graph from AGE..."):
+        with get_conn() as conn:
+            load_age(conn)
+
+            # --- Nodes ---
+            node_rows = conn.execute(
+                f"SELECT * FROM cypher('{graph_name}', $$"
+                f" MATCH (n) RETURN n{limit_clause}"
+                f" $$) AS (n agtype)"
+            ).fetchall()
+            for row in node_rows:
+                node = parse_agtype(row["n"])
+                age_id: int = node["id"]
+                kind: str = node.get("label", "Unknown")
+                props: dict[str, Any] = node.get("properties", {})
+                # Pick a human-readable display label
+                display = props.get("name") or props.get("title") or str(props.get("id", age_id))
+                G.add_node(age_id, label=display, kind=kind, **{k: str(v) for k, v in props.items()})
+
+            # --- Edges ---
+            edge_rows = conn.execute(
+                f"SELECT * FROM cypher('{graph_name}', $$"
+                f" MATCH ()-[r]->() RETURN r{limit_clause}"
+                f" $$) AS (r agtype)"
+            ).fetchall()
+            for row in edge_rows:
+                edge = parse_agtype(row["r"])
+                G.add_edge(edge["start_id"], edge["end_id"], label=edge.get("label", ""))
+
+    nx.write_gexf(G, output)
+
+    console.print(
+        Panel(
+            f"Nodes:  {G.number_of_nodes()}\n"
+            f"Edges:  {G.number_of_edges()}\n"
+            f"File:   {output.resolve()}",
+            title="[green]Graph exported[/green]",
+        )
+    )
+    console.print(f"\n[dim]Open with:[/dim]  gephi {output}")
 
 
 # ---------------------------------------------------------------------------
